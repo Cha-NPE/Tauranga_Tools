@@ -1,5 +1,5 @@
 const { defineConfig } = require('vite')
 
 module.exports = defineConfig({
-  base: '/Taranaki-Tools/'
+  base: '/Tauranga_Tools/'
 })
