@@ -1,22 +1,34 @@
 import { useRef, useState } from "react";
 import "./styles.css";
 
-// ---- Output spacing ----
-// Number of blank lines between each section of the output.
-// Change this one value to adjust the spacing everywhere.
-const BLANK_LINES_BETWEEN_SECTIONS = 1;
-const SECTION_GAP = "<div><br></div>".repeat(BLANK_LINES_BETWEEN_SECTIONS);
+// ---- Output format (matches the Tauranga NR job descriptions in simPRO) ----
+// Every line is a 10pt div, like the descriptions the Tauranga office types up.
+const LINE_STYLE = "font-size: 10pt;";
+const TEXT_STYLE = "font-size: 13.3333px;";
+const RED_STYLE = "color: #ff0000;";
 
-// Builds one section: an optional bold title followed by its lines.
-// Empty lines are dropped so missing fields don't leave gaps.
-function renderSection(title, lines = []) {
-    const body = lines
-        .filter(line => line && line.trim())
-        .map(line => `<div>${line}</div>`)
-        .join("");
-    const heading = title ? `<div><strong>${title}</strong></div>` : "";
-    return heading + body;
+// Order number for each Powerco area code in the job name (NR-<CIWR>-<code>-...).
+const ORDER_NUMBERS = {
+    EBP: "4100000591", // Tauranga & Mt Maunganui
+    EVL: "4100000588"  // Coromandel & South Waikato
+};
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 }
+
+const line = inner => `<div style="${LINE_STYLE}"><span style="${TEXT_STYLE}">${inner}</span></div>`;
+const blankLine = () => line("&nbsp;");
+const bold = text => `<strong>${escapeHtml(text)}</strong>`;
+const boldRed = text => `<strong><span style="${RED_STYLE}">${escapeHtml(text)}</span></strong>`;
+// "Label: value" with the value as plain text (an empty value still shows the label).
+const field = (label, value) => line(`${escapeHtml(label)}: ${escapeHtml(value)}`);
+// "Label: value" with only the label in bold.
+const boldLabelField = (label, value) => line(`${bold(label + ":")} ${escapeHtml(value)}`);
+const heading = text => line(bold(text));
 
 function NRFormatter() {
     const sapInputRef = useRef(null);
@@ -42,40 +54,6 @@ function NRFormatter() {
         }
 
         return text.substring(valueStart, valueEnd).trim();
-    }
-
-    function addLine(label, value){
-        if (!value?.trim()) { return "";}
-        return `${label}: ${value}`;
-    }
-
-    function formatPhone(phone) {
-        if (!phone) { return ""; }
-
-        let digits = phone.replace(/\D/g, "");
-
-        if (digits.startsWith("640")) { digits = "64" + digits.substring(3); }
-
-        if (digits.startsWith("642") && digits.length >= 10){
-            const local = "0" + digits.substring(2);
-            return local.replace(/(\d{3})(\d{3})(\d+)/, "$1 $2 $3");
-        }
-
-        if (digits.startsWith("64") && digits.length >= 10){
-            const local = "0" + digits.substring(2);
-            return local.replace(/(\d{2})(\d{3})(\d+)/, "$1 $2 $3");
-        }
-        return phone;
-    }
-
-    function formatAddress(address) {
-        if (!address) { return ""; }
-
-        return address
-            .toLowerCase()
-            .replace(/\s+,/g, ",")                              // remove whitespace directly before commas
-            .replace(/(^|[\s\-\/(])(\p{L})/gu,                  // capitalise first letter of each word
-                (match, before, letter) => before + letter.toUpperCase());
     }
 
     function getSection(text, sectionHeader, nextHeaders = []){
@@ -105,10 +83,14 @@ function NRFormatter() {
         const text = sapInputRef.current.innerText;
         const originalHTML = sapInputRef.current.innerHTML;
         
+        // The connection section is "NEW CONNECTION" or "CURRENT CONNECTION" (decommissions).
+        const connectionHeader = (text.match(/CONNECTION DETAILS[^\r\n]*/) || ["CONNECTION DETAILS - NEW CONNECTION"])[0].trim();
         const siteDetailsSection = getSection(text, "SITE DETAILS", ["CONNECTION DETAILS"]);
-        const connectionSection = getSection(text, "CONNECTION DETAILS - NEW CONNECTION", ["APPLICANT DETAILS"]);
-        const electricianSection = getSection(text, "ELECTRICIAN DETAILS", ["ELECTRICITY BILL PAYER DETAILS"]);
-        const applicantSection = getSection(text, "APPLICANT DETAILS", ["ELECTRICIAN DETAILS"]);
+        const connectionSection = getSection(text, connectionHeader, ["APPLICANT DETAILS", "ELECTRICIAN DETAILS"]);
+        const applicantSection = getSection(text, "APPLICANT DETAILS", ["ELECTRICIAN DETAILS", "ELECTRICITY BILL PAYER DETAILS"]);
+        const electricianSection = getSection(text, "ELECTRICIAN DETAILS", ["ELECTRICITY BILL PAYER DETAILS", "APPLICANT DETAILS"]);
+        const billPayerSection = getSection(text, "ELECTRICITY BILL PAYER DETAILS", ["OTHER DETAILS"]);
+        const otherSection = getSection(text, "OTHER DETAILS", []);
 
         //Email input
         const emailContent = emailText;
@@ -118,146 +100,120 @@ function NRFormatter() {
         const fullSubject = getValue(emailContent, "Subject:", "Work order status:");
         const parts = fullSubject.split("-");
         const subject = parts.slice(0, 3).join("-");
-        const icpNumber = getValue(emailContent, "ICP number:", "END");
+        const areaCode = (parts[2] || "").trim().toUpperCase();
+        const orderNumber = ORDER_NUMBERS[areaCode] || "";
+        const icpFromEmail = getValue(emailContent, "ICP number:", "END");
 
         //Details from SAP
         const jobClassification = getValue(text, "Network Ready Job Classification:", ["Permanent/Temporary:", "SITE DETAILS"]);
         const permanent = getValue(text, "Permanent/Temporary:", "SITE DETAILS");
 
+        const icpNumber = getValue(siteDetailsSection, "ICP Number (if existing):", ["Site Address:", "Legal Description:"]) || icpFromEmail;
         const siteAddress = getValue(siteDetailsSection, "Site Address:", ["Legal Description:", "Additional Details"]);
-        const titleAddress = formatAddress(siteAddress);
+        // Job name address in capitals, like the existing Tauranga job names.
+        const jobNameAddress = siteAddress.toUpperCase().replace(/\s+,/g, ",");
         const legalDescription = getValue(siteDetailsSection, "Legal Description:", "Additional Details:");
         const additionalDetails = getValue(siteDetailsSection, "Additional Details:", "Meter Number");
 
         const phasesRequired = getValue(connectionSection, "Phases Required:",["Load Demand:", "Required"]);
-        const loadDemand = getValue(connectionSection, "Load Demand:","BTS Installation Details:");
-        let assetType = getValue(connectionSection, "Asset Type:","Asset Number:");
-        const assetNumber = getValue(connectionSection, "Asset Number:","Transformer Site ID:");
-        const transformerSite = getValue(connectionSection, "Transformer Site ID:","High Level Job Scope:");
-        const jobScope = getValue(connectionSection, "High Level Job Scope:","Land Description:");
-        const landDescription = getValue(connectionSection, "Land Description:","Comments:");
+        const loadDemand = getValue(connectionSection, "Load Demand:", ["BTS Installation Details:", "Asset Type:"]);
+        const assetType = getValue(connectionSection, "Asset Type:", ["Asset Number:", "Transformer Site ID:"]);
+        const assetNumber = getValue(connectionSection, "Asset Number:", "Transformer Site ID:");
+        const transformerSite = getValue(connectionSection, "Transformer Site ID:", "High Level Job Scope:");
+        const jobScope = getValue(connectionSection, "High Level Job Scope:", ["Land Description:", "Comments:"]);
+        const landDescription = getValue(connectionSection, "Land Description:", "Comments:");
         const comments = getValue(connectionSection, "Comments:");
 
-        const electricianCompany = getValue(electricianSection, "Company:", "Name:");
-        const electricianName = getValue(electricianSection, "Name:", "Phone:");
-        const electricianPhone = formatPhone(getValue(electricianSection, "Phone:", "Email:"));
-        const electricianEmail = getValue(electricianSection, "Email:", "Nominated Inspector/Meter Installer:");
-        const inspector = getValue(electricianSection, "Nominated Inspector/Meter Installer:", "END");
+        const contactFields = ["Company:", "Name:", "Phone:", "Email:", "Nominated Inspector/Meter Installer:"];
+        const contact = section => {
+            const get = (label) => getValue(section, label, contactFields.filter(f => f !== label));
+            return {
+                company: get("Company:"),
+                name: get("Name:"),
+                phone: get("Phone:"),
+                email: get("Email:"),
+                inspector: get("Nominated Inspector/Meter Installer:")
+            };
+        };
+        const electrician = contact(electricianSection);
+        const applicant = contact(applicantSection);
+        const billPayer = contact(billPayerSection);
+        const inspector = electrician.inspector || applicant.inspector;
 
-        const applicantCompany = getValue(applicantSection, "Company:", "Name:");
-        const applicantName = getValue(applicantSection, "Name:", "Phone:");
-        const applicantPhone = formatPhone(getValue(applicantSection, "Phone:", "Email:"));
-        const applicantEmail = getValue(applicantSection, "Email:", "Nominated Inspector/Meter Installer:");
-        const applicantInspector = getValue(applicantSection, "Nominated Inspector/Meter Installer:", "END");
-
+        const energyRetailer = getValue(otherSection, "Energy Retailer:", ["Date Fieldwork Is Required:", "Known Hazards:", "Project Manager Name:"]);
+        const fieldworkDate = getValue(otherSection, "Date Fieldwork Is Required:", ["Known Hazards:", "Project Manager Name:"]);
+        const knownHazards = getValue(otherSection, "Known Hazards:", "Project Manager Name:");
         const projectManagerName = getLineValue(text, "Project Manager Name");
 
-        const isDecommission = jobClassification.toLowerCase().includes("decommission");
+        // ---- Job Type line ----
+        const classification = jobClassification.toLowerCase();
+        const isDecommission = classification.includes("decommission");
         const isTemporary = permanent.toLowerCase().includes("temp");
-        const normalizedJobClassification = (jobClassification || "").trim();
-        let displayJobClassification = normalizedJobClassification;
+        const phaseCount = { one: "1", two: "2", three: "3" }[phasesRequired.toLowerCase()] || phasesRequired;
+        const supply = [phaseCount ? `${phaseCount}P` : "", loadDemand ? `${loadDemand}A` : ""].filter(Boolean).join(" ");
+        let jobType;
+        if (isDecommission) jobType = "Decommission ICP";
+        else if (isTemporary) jobType = `BTS ${supply}`;
+        else if (classification.includes("modify")) jobType = `Modify ICP ${supply}`;
+        else jobType = `Perm ${supply}`;
 
-        if (isTemporary) {
-            displayJobClassification = "BTS Connection";
-        } else if (normalizedJobClassification.toLowerCase() === "new icp") {
-            displayJobClassification = "New Connection";
-        } else if (normalizedJobClassification.toLowerCase() === "modify icp") {
-            displayJobClassification = "Modify Connection";
-        }
-        const normalizedAssetType = (assetType || "").trim();
-        const normalizedAssetNumber = (assetNumber || "").trim();
-        const assetTypeMissing = !normalizedAssetType || normalizedAssetType.toLowerCase() === "transformer";
-        const assetNumberMissing = !normalizedAssetNumber;
+        // Site address in capitals, with the lot number added from the legal description.
+        const lot = (legalDescription.match(/\bLot\s+([A-Za-z0-9]+)/i) || [])[1];
+        let displayAddress = siteAddress.toUpperCase().replace(/\s+,/g, ",");
+        if (lot && !/\bLOT\b/.test(displayAddress)) displayAddress += ` - LOT ${lot.toUpperCase()}`;
 
-        const electricianDetailsMissing = ![electricianCompany, electricianName, electricianPhone, electricianEmail, inspector]
-            .some(value => value?.trim());
-        const displayCompany = electricianDetailsMissing ? applicantCompany : electricianCompany;
-        const displayName = electricianDetailsMissing ? applicantName : electricianName;
-        const displayPhone = electricianDetailsMissing ? applicantPhone : electricianPhone;
-        const displayEmail = electricianDetailsMissing ? applicantEmail : electricianEmail;
-        const displayInspector = electricianDetailsMissing ? applicantInspector : inspector;
-        const displaySectionTitle = electricianDetailsMissing ? "APPLICANT DETAILS - Electrician Details Missing" : "ELECTRICIAN DETAILS";
-
-        const dueDate = new Date();
-        dueDate.setMonth(dueDate.getMonth() + 1);
-        const formattedDate = String(dueDate.getDate()).padStart(2, "0") + "/" + String(dueDate.getMonth() + 1).padStart(2, "0") + "/" + dueDate.getFullYear();
+        const contactBlock = (title, person, showEmptyCompany = true) => [
+            heading(title),
+            (showEmptyCompany || person.company) ? field("Company", person.company) : "",
+            field("Name", person.name),
+            field("Phone", person.phone),
+            field("Email", person.email)
+        ];
 
         //Formatted output
-        const phaseText = {
-            one: "Single phase",
-            two: "Two phase",
-            three: "Three phase"
-        }[phasesRequired.toLowerCase()] || phasesRequired;
+        const output = [
+            // Read (and removed) by the Tauranga Job bookmarklet
+            `<div>${escapeHtml(workOrderNumber)} ${escapeHtml(subject)}-${escapeHtml(jobNameAddress)}</div>`,
+            `<div>${orderNumber}</div>`,
 
-        const headerBlock = [
-            `<div>${workOrderNumber} ${subject}-${titleAddress}</div>`,
-            `<div>4100000590</div>`,
-            `<div style="text-align:center;">
-                <span style="font-weight:bold; text-decoration: underline; font-size:10pt;">
-                    ${workOrderNumber} - ${titleAddress || legalDescription} - ${displayJobClassification}
-                </span>
-            </div>`
-        ].join("");
+            line(bold(`Job Type: ${jobType}`)),
+            blankLine(),
 
-        const contactLines = (company, name, phone, email) => [
-            addLine("Company", company),
-            addLine("Name", name),
-            addLine("Phone", phone),
-            addLine("Email", email)
-        ];
+            heading("SITE DETAILS"),
+            isDecommission ? field("ICP Number (if existing)", icpNumber) : "",
+            line(`Site Address: ${boldRed(displayAddress)}`),
+            legalDescription ? field("Legal Description", legalDescription) : "",
+            additionalDetails ? field("Additional Details", additionalDetails) : "",
+            blankLine(),
 
-        // Each entry is one section; SECTION_GAP is inserted between them.
-        const sections = isDecommission ? [
-            headerBlock,
-            renderSection(null, [
-                `${jobClassification} ${icpNumber}`,
-                `${assetType} ${assetNumber}`,
-                `Transformer Site ID ${transformerSite}`,
-                `Site address: ${siteAddress}`,
-                addLine("Additional Details", additionalDetails),
-                `High level job scope: ${jobScope}`
-            ]),
-            renderSection("ELECTRICIAN DETAILS",
-                contactLines(displayCompany, displayName, displayPhone, displayEmail)),
-            renderSection("Applicant Details",
-                contactLines(applicantCompany, applicantName, applicantPhone, applicantEmail))
-        ] : [
-            headerBlock,
-            renderSection(null, [
-                `${jobClassification} ${icpNumber}`,
-                `${phaseText} ${loadDemand}A`,
-                `Permanent/Temporary: ${permanent}`,
-                `Asset Type: ${assetType === "Pillar" ? "Pillar Box" : assetType} ${assetNumber}`,
-                `Transformer Site ID ${transformerSite}`
-            ]),
-            renderSection("Service Cable Size:", [
-                assetTypeMissing ? "<strong>Asset missing</strong>" : "",
-                assetNumberMissing ? "<strong>Asset number missing</strong>" : ""
-            ]),
-            renderSection("SITE DETAILS", [
-                addLine("Site Address", siteAddress),
-                addLine("Legal Description", legalDescription),
-                addLine("Additional Details", additionalDetails)
-            ]),
-            renderSection("CONNECTION DETAILS - NEW CONNECTION", [
-                addLine("Phases Required", phasesRequired),
-                addLine("Load Demand", loadDemand),
-                assetType === "Transformer" ? "" : addLine(
-                    assetType === "Pillar" ? "Pillar Box#" : assetType + "#",
-                    assetNumber),
-                addLine("Transformer Site ID", transformerSite),
-                addLine("High Level Job Scope", jobScope),
-                addLine("Land Description", landDescription),
-                addLine("Comments", comments)
-            ]),
-            renderSection(displaySectionTitle,
-                contactLines(displayCompany, displayName, displayPhone, displayEmail)),
-            renderSection("APPLICANT DETAILS",
-                contactLines(applicantCompany, applicantName, applicantPhone, applicantEmail))
-        ];
+            heading(connectionHeader),
+            isDecommission ? "" : field("Phases Required", phasesRequired),
+            isDecommission ? "" : field("Load Demand", loadDemand),
+            line(boldRed(`Asset Type: ${[assetType, assetNumber].filter(Boolean).join(" ")}`)),
+            field("Transformer Site ID", transformerSite),
+            blankLine(),
+            boldLabelField("High Level Job Scope", jobScope),
+            landDescription ? field("Land Description", landDescription) : "",
+            comments ? field("Comments", comments) : "",
+            blankLine(),
 
-        const projectManagerSection = renderSection(null, [addLine("Project Manager Name", projectManagerName)]);
-        const output = [...sections, projectManagerSection].filter(Boolean).join(SECTION_GAP);
+            ...contactBlock("ELECTRICIAN DETAILS", electrician),
+            blankLine(),
+            boldLabelField("Nominated Inspector/Meter Installer", inspector),
+            blankLine(),
+
+            ...contactBlock("APPLICANT DETAILS", applicant),
+            blankLine(),
+
+            ...contactBlock("ELECTRICITY BILL PAYER DETAILS", billPayer, false),
+            blankLine(),
+
+            heading("OTHER DETAILS"),
+            field("Energy Retailer", energyRetailer),
+            field("Date Fieldwork Is Required", fieldworkDate),
+            field("Known Hazards", knownHazards),
+            field("Project Manager Name", projectManagerName)
+        ].filter(Boolean).join("");
 
         setOutputHtml(output);
     }
