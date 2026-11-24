@@ -145,17 +145,8 @@ function NRFormatter() {
         const knownHazards = getValue(otherSection, "Known Hazards:", "Project Manager Name:");
         const projectManagerName = getLineValue(text, "Project Manager Name");
 
-        // ---- Job Type line ----
-        const classification = jobClassification.toLowerCase();
-        const isDecommission = classification.includes("decommission");
-        const isTemporary = permanent.toLowerCase().includes("temp");
-        const phaseCount = { one: "1", two: "2", three: "3" }[phasesRequired.toLowerCase()] || phasesRequired;
-        const supply = [phaseCount ? `${phaseCount}P` : "", loadDemand ? `${loadDemand}A` : ""].filter(Boolean).join(" ");
-        let jobType;
-        if (isDecommission) jobType = "Decommission ICP";
-        else if (isTemporary) jobType = `BTS ${supply}`;
-        else if (classification.includes("modify")) jobType = `Modify ICP ${supply}`;
-        else jobType = `Perm ${supply}`;
+        // Job Type is left blank; it's filled in by hand in simPRO.
+        const isDecommission = jobClassification.toLowerCase().includes("decommission");
 
         // Site address in capitals, with the lot number added from the legal description.
         const lot = (legalDescription.match(/\bLot\s+([A-Za-z0-9]+)/i) || [])[1];
@@ -176,7 +167,7 @@ function NRFormatter() {
             `<div>${escapeHtml(workOrderNumber)} ${escapeHtml(subject)}-${escapeHtml(jobNameAddress)}</div>`,
             `<div>${orderNumber}</div>`,
 
-            line(bold(`Job Type: ${jobType}`)),
+            line(bold("Job Type:")),
             blankLine(),
 
             heading("SITE DETAILS"),
